@@ -256,6 +256,8 @@ have_decode_tables:
 		u32 entry;
 		u32 length;
 		u32 offset;
+		const u8 *src;
+		u8 *dst, *end;
 
 		/* Decode a litlen symbol.  */
 		ENSURE_BITS(DEFLATE_MAX_LITLEN_CODEWORD_LEN);
@@ -330,53 +332,32 @@ have_decode_tables:
 
 		/* Copy the match: 'length' bytes at 'out_next - offset' to
 		 * 'out_next'.  */
+		src = out_next - offset;
+		dst = out_next;
+		end = out_next + length;
 
-		if (UNALIGNED_ACCESS_IS_FAST &&
-		    length <= (3 * WORDBYTES) &&
-		    offset >= WORDBYTES &&
-		    length + (3 * WORDBYTES) <= out_end - out_next)
-		{
-			/* Fast case: short length, no overlaps if we copy one
-			 * word at a time, and we aren't getting too close to
-			 * the end of the output array.  */
-			copy_word_unaligned(out_next - offset + (0 * WORDBYTES),
-					    out_next + (0 * WORDBYTES));
-			copy_word_unaligned(out_next - offset + (1 * WORDBYTES),
-					    out_next + (1 * WORDBYTES));
-			copy_word_unaligned(out_next - offset + (2 * WORDBYTES),
-					    out_next + (2 * WORDBYTES));
-		} else {
-			const u8 *src = out_next - offset;
-			u8 *dst = out_next;
-			u8 *end = out_next + length;
-
-			if (UNALIGNED_ACCESS_IS_FAST &&
-			    likely(out_end - end >= WORDBYTES - 1)) {
-				if (offset >= WORDBYTES) {
+		if (likely(length + (3 * WORDBYTES) - DEFLATE_MIN_MATCH_LEN <=
+			   out_end - out_next)) {
+			if (UNALIGNED_ACCESS_IS_FAST && offset >= WORDBYTES) {
+				copy_word_unaligned(src, dst);
+				src += WORDBYTES, dst += WORDBYTES;
+				copy_word_unaligned(src, dst);
+				src += WORDBYTES, dst += WORDBYTES;
+				do {
 					copy_word_unaligned(src, dst);
-					src += WORDBYTES;
+					src += WORDBYTES, dst += WORDBYTES;
+				} while (dst < end);
+			} else if (UNALIGNED_ACCESS_IS_FAST && offset == 1) {
+				machine_word_t v = repeat_byte(*(out_next - 1));
+
+				store_word_unaligned(v, dst);
+				dst += WORDBYTES;
+				store_word_unaligned(v, dst);
+				dst += WORDBYTES;
+				do {
+					store_word_unaligned(v, dst);
 					dst += WORDBYTES;
-					if (dst < end) {
-						do {
-							copy_word_unaligned(src, dst);
-							src += WORDBYTES;
-							dst += WORDBYTES;
-						} while (dst < end);
-					}
-				} else if (offset == 1) {
-					machine_word_t v = repeat_byte(*(dst - 1));
-					do {
-						store_word_unaligned(v, dst);
-						src += WORDBYTES;
-						dst += WORDBYTES;
-					} while (dst < end);
-				} else {
-					*dst++ = *src++;
-					*dst++ = *src++;
-					do {
-						*dst++ = *src++;
-					} while (dst < end);
-				}
+				} while (dst < end);
 			} else {
 				*dst++ = *src++;
 				*dst++ = *src++;
@@ -384,6 +365,12 @@ have_decode_tables:
 					*dst++ = *src++;
 				} while (dst < end);
 			}
+		} else {
+			*dst++ = *src++;
+			*dst++ = *src++;
+			do {
+				*dst++ = *src++;
+			} while (dst < end);
 		}
 
 		out_next += length;
