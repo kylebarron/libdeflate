@@ -31,6 +31,8 @@
  * target instruction sets.
  */
 
+#include <emmintrin.h>
+
 static enum libdeflate_result ATTRIBUTES
 FUNCNAME(struct libdeflate_decompressor * restrict d,
 	 const void * restrict in, size_t in_nbytes,
@@ -336,9 +338,17 @@ have_decode_tables:
 		dst = out_next;
 		end = out_next + length;
 
-		if (likely(length + (3 * WORDBYTES) - DEFLATE_MIN_MATCH_LEN <=
+		if (likely(length + (4 * WORDBYTES) - DEFLATE_MIN_MATCH_LEN <=
 			   out_end - out_next)) {
-			if (UNALIGNED_ACCESS_IS_FAST && offset >= WORDBYTES) {
+			if (UNALIGNED_ACCESS_IS_FAST && offset >= 2 * WORDBYTES) {
+
+				_mm_storeu_si128(dst, _mm_loadu_si128(src));
+				src += 16, dst += 16;
+				do {
+					_mm_storeu_si128(dst, _mm_loadu_si128(src));
+					src += 16, dst += 16;
+				} while (dst < end);
+			} else if (UNALIGNED_ACCESS_IS_FAST && offset >= WORDBYTES) {
 				copy_word_unaligned(src, dst);
 				src += WORDBYTES, dst += WORDBYTES;
 				copy_word_unaligned(src, dst);
@@ -346,16 +356,16 @@ have_decode_tables:
 				do {
 					copy_word_unaligned(src, dst);
 					src += WORDBYTES, dst += WORDBYTES;
+					copy_word_unaligned(src, dst);
+					src += WORDBYTES, dst += WORDBYTES;
 				} while (dst < end);
 			} else if (UNALIGNED_ACCESS_IS_FAST && offset == 1) {
-				machine_word_t v = repeat_byte(*(out_next - 1));
+				__m128i v = _mm_set1_epi8(*(out_next - 1));
 
-				store_word_unaligned(v, dst);
-				dst += WORDBYTES;
-				store_word_unaligned(v, dst);
+				_mm_storeu_si128(dst, v);
 				dst += WORDBYTES;
 				do {
-					store_word_unaligned(v, dst);
+					_mm_storeu_si128(dst, v);
 					dst += WORDBYTES;
 				} while (dst < end);
 			} else {
