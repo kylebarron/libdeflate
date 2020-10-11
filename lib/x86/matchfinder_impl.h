@@ -25,48 +25,52 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifdef __AVX2__
-#  if MATCHFINDER_ALIGNMENT < 32
-#    undef MATCHFINDER_ALIGNMENT
-#    define MATCHFINDER_ALIGNMENT 32
+#include "cpu_features.h"
+
+#undef DISPATCH_AVX2
+#if !defined(matchfinder_init_default) && \
+	(defined(__AVX2__) || (X86_CPU_FEATURES_ENABLED && \
+			       COMPILER_SUPPORTS_AVX2_TARGET_INTRINSICS))
+#  ifdef __AVX2__
+#    define ATTRIBUTES
+#    define matchfinder_init_default	matchfinder_init_avx2
+#    define matchfinder_rebase_default	matchfinder_rebase_avx2
+#  else
+#    define ATTRIBUTES		__attribute__((target("avx2")))
+#    define DISPATCH		1
+#    define DISPATCH_AVX2	1
 #  endif
 #  include <immintrin.h>
-static forceinline bool
+static void ATTRIBUTES
 matchfinder_init_avx2(mf_pos_t *data, size_t size)
 {
-	__m256i v, *p;
-	size_t n;
+	__m256i *p = (__m256i *)data;
+	__m256i v = _mm256_set1_epi16(MATCHFINDER_INITVAL);
 
-	if (size % (sizeof(__m256i) * 4) != 0)
-		return false;
-
+	STATIC_ASSERT(MATCHFINDER_DATA_ALIGNMENT % sizeof(*p) == 0);
+	STATIC_ASSERT(MATCHFINDER_SIZE_ALIGNMENT % (4 * sizeof(*p)) == 0);
 	STATIC_ASSERT(sizeof(mf_pos_t) == 2);
-	v = _mm256_set1_epi16(MATCHFINDER_INITVAL);
-	p = (__m256i *)data;
-	n = size / (sizeof(__m256i) * 4);
+
 	do {
 		p[0] = v;
 		p[1] = v;
 		p[2] = v;
 		p[3] = v;
 		p += 4;
-	} while (--n);
-	return true;
+		size -= 4 * sizeof(*p);
+	} while (size != 0);
 }
 
-static forceinline bool
+static void ATTRIBUTES
 matchfinder_rebase_avx2(mf_pos_t *data, size_t size)
 {
-	__m256i v, *p;
-	size_t n;
+	__m256i *p = (__m256i *)data;
+	__m256i v = _mm256_set1_epi16((u16)-MATCHFINDER_WINDOW_SIZE);
 
-	if (size % (sizeof(__m256i) * 4) != 0)
-		return false;
-
+	STATIC_ASSERT(MATCHFINDER_DATA_ALIGNMENT % sizeof(*p) == 0);
+	STATIC_ASSERT(MATCHFINDER_SIZE_ALIGNMENT % (4 * sizeof(*p)) == 0);
 	STATIC_ASSERT(sizeof(mf_pos_t) == 2);
-	v = _mm256_set1_epi16((u16)-MATCHFINDER_WINDOW_SIZE);
-	p = (__m256i *)data;
-	n = size / (sizeof(__m256i) * 4);
+
 	do {
 		/* PADDSW: Add Packed Signed Integers With Signed Saturation  */
 		p[0] = _mm256_adds_epi16(p[0], v);
@@ -74,53 +78,56 @@ matchfinder_rebase_avx2(mf_pos_t *data, size_t size)
 		p[2] = _mm256_adds_epi16(p[2], v);
 		p[3] = _mm256_adds_epi16(p[3], v);
 		p += 4;
-	} while (--n);
-	return true;
+		size -= 4 * sizeof(*p);
+	} while (size != 0);
 }
-#endif /* __AVX2__ */
+#undef ATTRIBUTES
+#endif /* AVX2 implementation */
 
-#ifdef __SSE2__
-#  if MATCHFINDER_ALIGNMENT < 16
-#    undef MATCHFINDER_ALIGNMENT
-#    define MATCHFINDER_ALIGNMENT 16
+#undef DISPATCH_SSE2
+#if !defined(matchfinder_init_default) && \
+	(defined(__SSE2__) || (X86_CPU_FEATURES_ENABLED && \
+			       COMPILER_SUPPORTS_SSE2_TARGET_INTRINSICS))
+#  ifdef __SSE2__
+#    define ATTRIBUTES
+#    define matchfinder_init_default	matchfinder_init_sse2
+#    define matchfinder_rebase_default	matchfinder_rebase_sse2
+#  else
+#    define ATTRIBUTES		__attribute__((target("sse2")))
+#    define DISPATCH		1
+#    define DISPATCH_SSE2	1
 #  endif
 #  include <emmintrin.h>
-static forceinline bool
+static void ATTRIBUTES
 matchfinder_init_sse2(mf_pos_t *data, size_t size)
 {
-	__m128i v, *p;
-	size_t n;
+	__m128i *p = (__m128i *)data;
+	__m128i v = _mm_set1_epi16(MATCHFINDER_INITVAL);
 
-	if (size % (sizeof(__m128i) * 4) != 0)
-		return false;
-
+	STATIC_ASSERT(MATCHFINDER_DATA_ALIGNMENT % sizeof(*p) == 0);
+	STATIC_ASSERT(MATCHFINDER_SIZE_ALIGNMENT % (4 * sizeof(*p)) == 0);
 	STATIC_ASSERT(sizeof(mf_pos_t) == 2);
-	v = _mm_set1_epi16(MATCHFINDER_INITVAL);
-	p = (__m128i *)data;
-	n = size / (sizeof(__m128i) * 4);
+
 	do {
 		p[0] = v;
 		p[1] = v;
 		p[2] = v;
 		p[3] = v;
 		p += 4;
-	} while (--n);
-	return true;
+		size -= 4 * sizeof(*p);
+	} while (size != 0);
 }
 
-static forceinline bool
+static void ATTRIBUTES
 matchfinder_rebase_sse2(mf_pos_t *data, size_t size)
 {
-	__m128i v, *p;
-	size_t n;
+	__m128i *p = (__m128i *)data;
+	__m128i v = _mm_set1_epi16((u16)-MATCHFINDER_WINDOW_SIZE);
 
-	if (size % (sizeof(__m128i) * 4) != 0)
-		return false;
-
+	STATIC_ASSERT(MATCHFINDER_DATA_ALIGNMENT % sizeof(*p) == 0);
+	STATIC_ASSERT(MATCHFINDER_SIZE_ALIGNMENT % (4 * sizeof(*p)) == 0);
 	STATIC_ASSERT(sizeof(mf_pos_t) == 2);
-	v = _mm_set1_epi16((u16)-MATCHFINDER_WINDOW_SIZE);
-	p = (__m128i *)data;
-	n = size / (sizeof(__m128i) * 4);
+
 	do {
 		/* PADDSW: Add Packed Signed Integers With Signed Saturation  */
 		p[0] = _mm_adds_epi16(p[0], v);
@@ -128,37 +135,42 @@ matchfinder_rebase_sse2(mf_pos_t *data, size_t size)
 		p[2] = _mm_adds_epi16(p[2], v);
 		p[3] = _mm_adds_epi16(p[3], v);
 		p += 4;
-	} while (--n);
-	return true;
+		size -= 4 * sizeof(*p);
+	} while (size != 0);
 }
-#endif /* __SSE2__ */
+#undef ATTRIBUTES
+#endif /* SSE2 implementation */
 
-#undef arch_matchfinder_init
-static forceinline bool
-arch_matchfinder_init(mf_pos_t *data, size_t size)
+#ifdef DISPATCH
+static inline mf_init_func_t
+arch_select_matchfinder_init_func(void)
 {
-#ifdef __AVX2__
-	if (matchfinder_init_avx2(data, size))
-		return true;
+	u32 features = get_cpu_features();
+
+#ifdef DISPATCH_AVX2
+	if (features & X86_CPU_FEATURE_AVX2)
+		return matchfinder_init_avx2;
 #endif
-#ifdef __SSE2__
-	if (matchfinder_init_sse2(data, size))
-		return true;
+#ifdef DISPATCH_SSE2
+	if (features & X86_CPU_FEATURE_SSE2)
+		return matchfinder_init_sse2;
 #endif
-	return false;
+	return NULL;
 }
 
-#undef arch_matchfinder_rebase
-static forceinline bool
-arch_matchfinder_rebase(mf_pos_t *data, size_t size)
+static inline mf_rebase_func_t
+arch_select_matchfinder_rebase_func(void)
 {
-#ifdef __AVX2__
-	if (matchfinder_rebase_avx2(data, size))
-		return true;
+	u32 features = get_cpu_features();
+
+#ifdef DISPATCH_AVX2
+	if (features & X86_CPU_FEATURE_AVX2)
+		return matchfinder_rebase_avx2;
 #endif
-#ifdef __SSE2__
-	if (matchfinder_rebase_sse2(data, size))
-		return true;
+#ifdef DISPATCH_SSE2
+	if (features & X86_CPU_FEATURE_SSE2)
+		return matchfinder_rebase_sse2;
 #endif
-	return false;
+	return NULL;
 }
+#endif /* DISPATCH */

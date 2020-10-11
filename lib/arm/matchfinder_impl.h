@@ -25,69 +25,99 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifdef __ARM_NEON
-#  if MATCHFINDER_ALIGNMENT < 16
-#    undef MATCHFINDER_ALIGNMENT
-#    define MATCHFINDER_ALIGNMENT 16
+#include "cpu_features.h"
+
+#undef DISPATCH_NEON
+#if !defined(matchfinder_init_default) &&	\
+	(defined(__ARM_NEON) || (ARM_CPU_FEATURES_ENABLED &&	\
+				 COMPILER_SUPPORTS_NEON_TARGET_INTRINSICS))
+#  ifdef __ARM_NEON
+#    define ATTRIBUTES
+#    define matchfinder_init_default	matchfinder_init_neon
+#    define matchfinder_rebase_default	matchfinder_rebase_neon
+#  else
+#    ifdef __arm__
+#      define ATTRIBUTES	__attribute__((target("fpu=neon")))
+#    else
+#      define ATTRIBUTES	__attribute__((target("+simd")))
+#    endif
+#    define DISPATCH		1
+#    define DISPATCH_NEON	1
 #  endif
 #  include <arm_neon.h>
-static forceinline bool
+static void ATTRIBUTES
 matchfinder_init_neon(mf_pos_t *data, size_t size)
 {
-	int16x8_t v, *p;
-	size_t n;
-
-	if (size % (sizeof(int16x8_t) * 4) != 0)
-		return false;
-
-	STATIC_ASSERT(sizeof(mf_pos_t) == 2);
-	v = (int16x8_t) {
+	int16x8_t *p = (int16x8_t *)data;
+	int16x8_t v = (int16x8_t) {
 		MATCHFINDER_INITVAL, MATCHFINDER_INITVAL, MATCHFINDER_INITVAL,
 		MATCHFINDER_INITVAL, MATCHFINDER_INITVAL, MATCHFINDER_INITVAL,
 		MATCHFINDER_INITVAL, MATCHFINDER_INITVAL,
 	};
-	p = (int16x8_t *)data;
-	n = size / (sizeof(int16x8_t) * 4);
+
+	STATIC_ASSERT(MATCHFINDER_DATA_ALIGNMENT % sizeof(*p) == 0);
+	STATIC_ASSERT(MATCHFINDER_SIZE_ALIGNMENT % (4 * sizeof(*p)) == 0);
+	STATIC_ASSERT(sizeof(mf_pos_t) == 2);
+
 	do {
 		p[0] = v;
 		p[1] = v;
 		p[2] = v;
 		p[3] = v;
 		p += 4;
-	} while (--n);
-	return true;
+		size -= 4 * sizeof(*p);
+	} while (size != 0);
 }
-#undef arch_matchfinder_init
-#define arch_matchfinder_init matchfinder_init_neon
 
-static forceinline bool
+static void ATTRIBUTES
 matchfinder_rebase_neon(mf_pos_t *data, size_t size)
 {
-	int16x8_t v, *p;
-	size_t n;
-
-	if (size % (sizeof(int16x8_t) * 4) != 0)
-		return false;
-
-	STATIC_ASSERT(sizeof(mf_pos_t) == 2);
-	v = (int16x8_t) {
+	int16x8_t *p = (int16x8_t *)data;
+	int16x8_t v = (int16x8_t) {
 		(u16)-MATCHFINDER_WINDOW_SIZE, (u16)-MATCHFINDER_WINDOW_SIZE,
 		(u16)-MATCHFINDER_WINDOW_SIZE, (u16)-MATCHFINDER_WINDOW_SIZE,
 		(u16)-MATCHFINDER_WINDOW_SIZE, (u16)-MATCHFINDER_WINDOW_SIZE,
 		(u16)-MATCHFINDER_WINDOW_SIZE, (u16)-MATCHFINDER_WINDOW_SIZE,
 	};
-	p = (int16x8_t *)data;
-	n = size / (sizeof(int16x8_t) * 4);
+
+	STATIC_ASSERT(MATCHFINDER_DATA_ALIGNMENT % sizeof(*p) == 0);
+	STATIC_ASSERT(MATCHFINDER_SIZE_ALIGNMENT % (4 * sizeof(*p)) == 0);
+	STATIC_ASSERT(sizeof(mf_pos_t) == 2);
+
 	do {
 		p[0] = vqaddq_s16(p[0], v);
 		p[1] = vqaddq_s16(p[1], v);
 		p[2] = vqaddq_s16(p[2], v);
 		p[3] = vqaddq_s16(p[3], v);
 		p += 4;
-	} while (--n);
-	return true;
+		size -= 4 * sizeof(*p);
+	} while (size != 0);
 }
-#undef arch_matchfinder_rebase
-#define arch_matchfinder_rebase matchfinder_rebase_neon
+#undef ATTRIBUTES
+#endif /* NEON implementation */
 
-#endif /* __ARM_NEON */
+#ifdef DISPATCH
+static inline mf_init_func_t
+arch_select_matchfinder_init_func(void)
+{
+	u32 features = get_cpu_features();
+
+#ifdef DISPATCH_NEON
+	if (features & ARM_CPU_FEATURE_NEON)
+		return matchfinder_init_neon;
+#endif
+	return NULL;
+}
+
+static inline mf_rebase_func_t
+arch_select_matchfinder_rebase_func(void)
+{
+	u32 features = get_cpu_features();
+
+#ifdef DISPATCH_NEON
+	if (features & ARM_CPU_FEATURE_NEON)
+		return matchfinder_rebase_neon;
+#endif
+	return NULL;
+}
+#endif /* DISPATCH */

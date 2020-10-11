@@ -2698,7 +2698,7 @@ libdeflate_alloc_compressor(int compression_level)
 		size += sizeof(c->p.g);
 #endif
 
-	c = libdeflate_aligned_malloc(MATCHFINDER_ALIGNMENT, size);
+	c = libdeflate_aligned_malloc(MATCHFINDER_DATA_ALIGNMENT, size);
 	if (!c)
 		return NULL;
 

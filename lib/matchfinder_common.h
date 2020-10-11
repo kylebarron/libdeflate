@@ -18,11 +18,17 @@ typedef s16 mf_pos_t;
 
 #define MATCHFINDER_INITVAL ((mf_pos_t)-MATCHFINDER_WINDOW_SIZE)
 
-#define MATCHFINDER_ALIGNMENT 8
+/*
+ * Required alignment of the matchfinder buffer pointer and size.  The values
+ * here come from the AVX-2 implementation, which is the worst case.
+ */
+#define MATCHFINDER_DATA_ALIGNMENT	32
+#define MATCHFINDER_SIZE_ALIGNMENT	128
 
-#define arch_matchfinder_init(data, size)	false
-#define arch_matchfinder_rebase(data, size)	false
+typedef void (*mf_init_func_t)(mf_pos_t *data, size_t size);
+typedef void (*mf_rebase_func_t)(mf_pos_t *data, size_t size);
 
+#undef DISPATCH
 #ifdef _aligned_attribute
 #  if defined(__arm__) || defined(__aarch64__)
 #    include "arm/matchfinder_impl.h"
@@ -31,53 +37,20 @@ typedef s16 mf_pos_t;
 #  endif
 #endif
 
-/*
- * Initialize the hash table portion of the matchfinder.
- *
- * Essentially, this is an optimized memset().
- *
- * 'data' must be aligned to a MATCHFINDER_ALIGNMENT boundary.
- */
-static forceinline void
-matchfinder_init(mf_pos_t *data, size_t num_entries)
+#ifndef matchfinder_init_default
+static inline void matchfinder_init_default(mf_pos_t *data, size_t size)
 {
+	size_t num_entries = size / sizeof(*data);
 	size_t i;
-
-	if (arch_matchfinder_init(data, num_entries * sizeof(data[0])))
-		return;
 
 	for (i = 0; i < num_entries; i++)
 		data[i] = MATCHFINDER_INITVAL;
 }
 
-/*
- * Slide the matchfinder by WINDOW_SIZE bytes.
- *
- * This must be called just after each WINDOW_SIZE bytes have been run through
- * the matchfinder.
- *
- * This will subtract WINDOW_SIZE bytes from each entry in the array specified.
- * The effect is that all entries are updated to be relative to the current
- * position, rather than the position WINDOW_SIZE bytes prior.
- *
- * Underflow is detected and replaced with signed saturation.  This ensures that
- * once the sliding window has passed over a position, that position forever
- * remains out of bounds.
- *
- * The array passed in must contain all matchfinder data that is
- * position-relative.  Concretely, this will include the hash table as well as
- * the table of positions that is used to link together the sequences in each
- * hash bucket.  Note that in the latter table, the links are 1-ary in the case
- * of "hash chains", and 2-ary in the case of "binary trees".  In either case,
- * the links need to be rebased in the same way.
- */
-static forceinline void
-matchfinder_rebase(mf_pos_t *data, size_t num_entries)
+static inline void matchfinder_rebase_default(mf_pos_t *data, size_t size)
 {
+	size_t num_entries = size / sizeof(*data);
 	size_t i;
-
-	if (arch_matchfinder_rebase(data, num_entries * sizeof(data[0])))
-		return;
 
 	if (MATCHFINDER_WINDOW_SIZE == 32768) {
 		/* Branchless version for 32768 byte windows.  If the value was
@@ -100,6 +73,90 @@ matchfinder_rebase(mf_pos_t *data, size_t num_entries)
 		else
 			data[i] = (mf_pos_t)-MATCHFINDER_WINDOW_SIZE;
 	}
+}
+#endif /* !matchfinder_init_default */
+
+#ifdef DISPATCH
+static void dispatch_matchfinder_init(mf_pos_t *data, size_t size);
+static void dispatch_matchfinder_rebase(mf_pos_t *data, size_t size);
+
+static volatile mf_init_func_t matchfinder_init_impl =
+	dispatch_matchfinder_init;
+static volatile mf_rebase_func_t matchfinder_rebase_impl =
+	dispatch_matchfinder_rebase;
+
+/* Choose the fastest implementation at runtime */
+static void dispatch_matchfinder_init(mf_pos_t *data, size_t size)
+{
+	mf_init_func_t f = arch_select_matchfinder_init_func();
+
+	if (f == NULL)
+		f = matchfinder_init_default;
+
+	matchfinder_init_impl = f;
+	(*f)(data, size);
+}
+
+/* Choose the fastest implementation at runtime */
+static void dispatch_matchfinder_rebase(mf_pos_t *data, size_t size)
+{
+	mf_rebase_func_t f = arch_select_matchfinder_rebase_func();
+
+	if (f == NULL)
+		f = matchfinder_rebase_default;
+
+	matchfinder_rebase_impl = f;
+	(*f)(data, size);
+}
+#else
+   /* only one implementation, use it */
+#  define matchfinder_init_impl matchfinder_init_default
+#  define matchfinder_rebase_impl matchfinder_rebase_default
+#endif
+#undef DISPATCH
+
+/*
+ * Initialize the hash table portion of the matchfinder.
+ *
+ * Essentially, this is an optimized memset().
+ *
+ * 'data' must be aligned to a MATCHFINDER_DATA_ALIGNMENT boundary, and
+ * 'size' must be a multiple of MATCHFINDER_SIZE_ALIGNMENT.
+ */
+static forceinline void
+matchfinder_init(mf_pos_t *data, size_t size)
+{
+	matchfinder_init_impl(data, size);
+}
+
+/*
+ * Slide the matchfinder by WINDOW_SIZE bytes.
+ *
+ * This must be called just after each WINDOW_SIZE bytes have been run through
+ * the matchfinder.
+ *
+ * This will subtract WINDOW_SIZE bytes from each entry in the array specified.
+ * The effect is that all entries are updated to be relative to the current
+ * position, rather than the position WINDOW_SIZE bytes prior.
+ *
+ * Underflow is detected and replaced with signed saturation.  This ensures that
+ * once the sliding window has passed over a position, that position forever
+ * remains out of bounds.
+ *
+ * The array passed in must contain all matchfinder data that is
+ * position-relative.  Concretely, this will include the hash table as well as
+ * the table of positions that is used to link together the sequences in each
+ * hash bucket.  Note that in the latter table, the links are 1-ary in the case
+ * of "hash chains", and 2-ary in the case of "binary trees".  In either case,
+ * the links need to be rebased in the same way.
+ *
+ * 'data' must be aligned to a MATCHFINDER_DATA_ALIGNMENT boundary, and
+ * 'size' must be a multiple of MATCHFINDER_SIZE_ALIGNMENT.
+ */
+static forceinline void
+matchfinder_rebase(mf_pos_t *data, size_t num_entries)
+{
+	matchfinder_rebase_impl(data, num_entries);
 }
 
 /*
